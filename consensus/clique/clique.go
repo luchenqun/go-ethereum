@@ -19,11 +19,16 @@ package clique
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum/accounts/abi"
+	"github.com/ethereum/go-ethereum/common/math"
+	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"io"
 	"math/big"
 	"math/rand"
+	"strings"
 	"sync"
 	"time"
 
@@ -181,6 +186,7 @@ type Clique struct {
 	signer common.Address // Ethereum address of the signing key
 	signFn SignerFn       // Signer function to authorize hashes with
 	lock   sync.RWMutex   // Protects the signer fields
+	ethapi *ethapi.PublicBlockChainAPI
 
 	// The fields below are for testing only
 	fakeDiff bool // Skip difficulty verifications
@@ -188,7 +194,7 @@ type Clique struct {
 
 // New creates a Clique proof-of-authority consensus engine with the initial
 // signers set to the ones provided by the user.
-func New(config *params.CliqueConfig, db ethdb.Database) *Clique {
+func New(config *params.CliqueConfig, db ethdb.Database, ethapi *ethapi.PublicBlockChainAPI) *Clique {
 	// Set any missing consensus parameters to their defaults
 	conf := *config
 	if conf.Epoch == 0 {
@@ -204,6 +210,7 @@ func New(config *params.CliqueConfig, db ethdb.Database) *Clique {
 		recents:    recents,
 		signatures: signatures,
 		proposals:  make(map[common.Address]bool),
+		ethapi:     ethapi,
 	}
 }
 
@@ -590,6 +597,7 @@ func (c *Clique) Authorize(signer common.Address, signFn SignerFn) {
 // Seal implements consensus.Engine, attempting to create a sealed block using
 // the local signing credentials.
 func (c *Clique) Seal(chain consensus.ChainHeaderReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}) error {
+	c.BalanceOfGov(block.Header().ParentHash, common.HexToAddress("0x00000be6819f41400225702d32d3dd23663dd690"))
 	header := block.Header()
 
 	// Sealing the genesis block is not supported
@@ -695,6 +703,32 @@ func (c *Clique) APIs(chain consensus.ChainHeaderReader) []rpc.API {
 		Service:   &API{chain: chain, clique: c},
 		Public:    false,
 	}}
+}
+
+// BalanceOfGov get account has the gov token amount
+func (c *Clique) BalanceOfGov(hash common.Hash, address common.Address) uint64 {
+	blockNr := rpc.BlockNumberOrHashWithHash(hash, false)
+	method := "balanceOf"
+	abiGovToken, _ := abi.JSON(strings.NewReader(govTokenABI))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel() // cancel when we are finished consuming integers
+
+	data, _ := abiGovToken.Pack(method, address)
+	msgData := (hexutil.Bytes)(data)
+	toAddress := common.HexToAddress("0xf000000000000000000000000000000000000000")
+	gas := (hexutil.Uint64)(uint64(math.MaxUint64 / 2))
+	result, err := c.ethapi.Call(ctx, ethapi.TransactionArgs{
+		Gas:  &gas,
+		To:   &toAddress,
+		Data: &msgData,
+	}, blockNr, nil)
+	if err != nil {
+		log.Error("Call BalanceOfGov", "Error", err)
+		return 0
+	}
+	balance := new(big.Int).SetBytes(result).Uint64()
+	log.Info("BalanceOfGov", "balance", balance)
+	return balance
 }
 
 // SealHash returns the hash of a block prior to it being sealed.
