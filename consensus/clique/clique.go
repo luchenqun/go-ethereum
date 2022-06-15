@@ -477,6 +477,12 @@ func (c *Clique) verifySeal(snap *Snapshot, header *types.Header, parents []*typ
 	if err != nil {
 		return err
 	}
+
+	amount := c.BalanceOfGov(header.ParentHash, signer)
+	if amount == 0 {
+		return errors.New("signer " + signer.String() + " gov token amount is 0, verify seal fail")
+	}
+
 	if _, ok := snap.Signers[signer]; !ok {
 		return errUnauthorizedSigner
 	}
@@ -597,7 +603,6 @@ func (c *Clique) Authorize(signer common.Address, signFn SignerFn) {
 // Seal implements consensus.Engine, attempting to create a sealed block using
 // the local signing credentials.
 func (c *Clique) Seal(chain consensus.ChainHeaderReader, block *types.Block, results chan<- *types.Block, stop <-chan struct{}) error {
-	c.BalanceOfGov(block.Header().ParentHash, common.HexToAddress("0x00000be6819f41400225702d32d3dd23663dd690"))
 	header := block.Header()
 
 	// Sealing the genesis block is not supported
@@ -605,6 +610,12 @@ func (c *Clique) Seal(chain consensus.ChainHeaderReader, block *types.Block, res
 	if number == 0 {
 		return errUnknownBlock
 	}
+
+	amount := c.BalanceOfGov(block.Header().ParentHash, c.signer)
+	if amount == 0 {
+		return errors.New("signer " + c.signer.String() + " gov token amount is 0, no authority seal block")
+	}
+
 	// For 0-period chains, refuse to seal empty blocks (no reward but would spin sealing)
 	if c.config.Period == 0 && len(block.Transactions()) == 0 {
 		return errors.New("sealing paused while waiting for transactions")
